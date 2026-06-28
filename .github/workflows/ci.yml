@@ -419,6 +419,7 @@ jobs:
     name: Test TLS Configuration
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    needs: test-cluster  # Wait for test-cluster to finish and cleanup
 
     steps:
       - name: Checkout repository

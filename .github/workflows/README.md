@@ -44,6 +44,8 @@
 
 **Duration**: ~6-8 minutes
 
+**Note**: Runs sequentially after `test-cluster` completes to avoid container name conflicts (both jobs use `clickhouse-loadbalancer`, etc.)
+
 ---
 
 ## Test Credentials (CI Only)
