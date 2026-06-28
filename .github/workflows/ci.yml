@@ -199,32 +199,19 @@ jobs:
       - name: Test ClickHouse operations
         run: |
           echo "Testing ClickHouse database operations..."
+          echo "Using SQL from test_sql.sql"
+          echo ""
 
-          # Create database
-          docker exec clickhouse-01 clickhouse-client \
-            --user admin \
-            --password test_admin_password_12345 \
-            --query "CREATE DATABASE IF NOT EXISTS test_db ON CLUSTER my_cluster"
+          CLI_OPTS="--user admin --password test_admin_password_12345"
+
+          # Create database using SQL file
+          echo "Creating database..."
+          ./extract_sql.sh DATABASE_SETUP | docker exec -i clickhouse-01 clickhouse-client $CLI_OPTS --multiquery
           echo "✓ Database created"
 
-          # Create replicated table
-          docker exec clickhouse-01 clickhouse-client \
-            --user admin \
-            --password test_admin_password_12345 \
-            --multiquery << 'EOF'
-          CREATE TABLE IF NOT EXISTS test_db.test_table ON CLUSTER my_cluster
-          (
-              id UInt64,
-              name String,
-              timestamp DateTime DEFAULT now()
-          )
-          ENGINE = ReplicatedMergeTree('/clickhouse/tables/{database}/{table}/{shard}', '{replica}')
-          ORDER BY (id, timestamp);
-
-          CREATE TABLE IF NOT EXISTS test_db.test_table_distributed ON CLUSTER my_cluster
-          AS test_db.test_table
-          ENGINE = Distributed('my_cluster', 'test_db', 'test_table', rand());
-          EOF
+          # Create tables using SQL file
+          echo "Creating tables..."
+          ./extract_sql.sh TABLE_CREATION | docker exec -i clickhouse-01 clickhouse-client $CLI_OPTS --multiquery
           echo "✓ Tables created"
 
           # Wait for distributed DDL to complete on all nodes
@@ -232,25 +219,22 @@ jobs:
           sleep 5
 
           # Verify tables exist on all nodes
+          echo "Verifying tables on all nodes..."
           for i in {01..04}; do
-            docker exec clickhouse-$i clickhouse-client \
-              --user admin \
-              --password test_admin_password_12345 \
+            docker exec clickhouse-$i clickhouse-client $CLI_OPTS \
               --query "EXISTS test_db.test_table_distributed" || exit 1
           done
           echo "✓ Tables verified on all nodes"
 
-          # Insert data via distributed table
-          docker exec clickhouse-01 clickhouse-client \
-            --user admin \
-            --password test_admin_password_12345 \
-            --query "INSERT INTO test_db.test_table_distributed (id, name) VALUES (1, 'test1'), (2, 'test2'), (3, 'test3')"
+          # Insert data via distributed table using SQL file
+          echo "Inserting test data..."
+          docker exec clickhouse-01 clickhouse-client $CLI_OPTS \
+            --query "INSERT INTO test_db.test_table_distributed (id, name, description) VALUES (1, 'test1', 'First test'), (2, 'test2', 'Second test'), (3, 'test3', 'Third test')"
           echo "✓ Data inserted"
 
           # Query data
-          RESULT=$(docker exec clickhouse-01 clickhouse-client \
-            --user admin \
-            --password test_admin_password_12345 \
+          echo "Querying data..."
+          RESULT=$(docker exec clickhouse-01 clickhouse-client $CLI_OPTS \
             --query "SELECT count() FROM test_db.test_table_distributed")
 
           if [ "$RESULT" -eq 3 ]; then
@@ -263,12 +247,16 @@ jobs:
           # Verify data is distributed across shards
           echo "Verifying data distribution..."
           for i in {01..04}; do
-            count=$(docker exec clickhouse-$i clickhouse-client \
-              --user admin \
-              --password test_admin_password_12345 \
+            count=$(docker exec clickhouse-$i clickhouse-client $CLI_OPTS \
               --query "SELECT count() FROM test_db.test_table")
             echo "  clickhouse-$i: $count rows"
           done
+
+          # Test cluster verification queries
+          echo "Running cluster verification..."
+          docker exec clickhouse-01 clickhouse-client $CLI_OPTS \
+            --query "SELECT hostName() as node, count() as rows FROM clusterAllReplicas('my_cluster', test_db.test_table) GROUP BY node ORDER BY node"
+          echo "✓ Cluster verification complete"
 
       - name: Test replication
         run: |

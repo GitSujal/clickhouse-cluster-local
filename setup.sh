@@ -101,10 +101,14 @@ for i in {01..04}; do
                 <replica>
                     <host>clickhouse-01</host>
                     <port>9000</port>
+                    <user>admin</user>
+                    <password>test_admin_password_12345</password>
                 </replica>
                 <replica>
                     <host>clickhouse-03</host>
                     <port>9000</port>
+                    <user>admin</user>
+                    <password>test_admin_password_12345</password>
                 </replica>
             </shard>
             <shard>
@@ -112,10 +116,14 @@ for i in {01..04}; do
                 <replica>
                     <host>clickhouse-02</host>
                     <port>9000</port>
+                    <user>admin</user>
+                    <password>test_admin_password_12345</password>
                 </replica>
                 <replica>
                     <host>clickhouse-04</host>
                     <port>9000</port>
+                    <user>admin</user>
+                    <password>test_admin_password_12345</password>
                 </replica>
             </shard>
         </my_cluster>
