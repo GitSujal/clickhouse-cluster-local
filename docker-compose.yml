@@ -1,40 +1,38 @@
 services:
-  # HAProxy Load Balancer - Single entry point for the cluster
+  # HAProxy Load Balancer (HTTP mode) - Use --profile loadbalancer
   haproxy_http:
     image: haproxy:latest
     container_name: clickhouse-loadbalancer
     hostname: haproxy
     profiles:
-      - loadbalancer
+      - loadbalancer  # Only starts with --profile loadbalancer
     volumes:
       - ${PWD}/haproxy-http.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
       - ${PWD}/certs:/usr/local/etc/haproxy/certs:ro
     ports:
       - "127.0.0.1:8123:8123"   # HTTP interface (load-balanced)
-      - "127.0.0.1:8443:8443"   # HTTPS interface (load-balanced, TLS termination)
       - "127.0.0.1:9000:9000"   # Native TCP interface (load-balanced)
       - "127.0.0.1:8404:8404"   # HAProxy stats page (HTTP)
-      - "127.0.0.1:8405:8405"   # HAProxy stats page (HTTPS)
     depends_on:
       - clickhouse-01
       - clickhouse-02
       - clickhouse-03
       - clickhouse-04
-  
+
+  # HAProxy Load Balancer (HTTPS mode) - Use --profile tls
   haproxy_https:
     image: haproxy:latest
     container_name: clickhouse-loadbalancer
     hostname: haproxy
     profiles:
       - all
-      - tls
-      - loadbalancer
+      - tls  # Only starts with --profile tls
     volumes:
       - ${PWD}/haproxy-https.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
       - ${PWD}/certs:/usr/local/etc/haproxy/certs:ro
     ports:
-      - "127.0.0.1:8123:8123"   # HTTP interface (load-balanced)
-      - "127.0.0.1:8443:8443"   # HTTPS interface (load-balanced, TLS termination)
+      - "127.0.0.1:8123:8123"   # HTTP interface (backward compat)
+      - "127.0.0.1:8443:8443"   # HTTPS interface (TLS termination)
       - "127.0.0.1:9000:9000"   # Native TCP interface (load-balanced)
       - "127.0.0.1:8404:8404"   # HAProxy stats page (HTTP)
       - "127.0.0.1:8405:8405"   # HAProxy stats page (HTTPS)

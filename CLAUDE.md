@@ -60,7 +60,7 @@ certs/                      TLS certificates (server.pem for HAProxy)
 | **HAProxy** | TLS termination, load balancing, health checks, stats page |
 | **Prometheus** | Scrapes ClickHouse `/metrics` endpoint (port 9363 per node) |
 | **Grafana** | Visualizes Prometheus metrics, pre-configured datasource |
-| **Docker profiles** | `basic` (required), `loadbalancer` (HTTP), `tls` (HTTPS), `monitoring` (Prom+Graf) |
+| **Docker profiles** | `basic` (required), `loadbalancer` (HTTP, exclusive), `tls` (HTTPS, exclusive), `monitoring` (Prom+Graf) |
 | **SHA256 passwords** | ClickHouse security requirement (setup.sh reads from .env) |
 
 ## Port Map (127.0.0.1 only)

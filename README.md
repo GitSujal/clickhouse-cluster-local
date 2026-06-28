@@ -90,20 +90,28 @@ All services bind to `127.0.0.1` for security.
 
 | Profile | Services | Use Case |
 |---------|----------|----------|
-| `basic` | ClickHouse + Keepers | Required base |
-| `loadbalancer` | HAProxy (HTTP) | HTTP load balancing |
-| `tls` | HAProxy (HTTPS) | TLS termination |
+| `basic` | ClickHouse + Keepers | Required base (always needed) |
+| `loadbalancer` | HAProxy (HTTP mode) | HTTP load balancing (mutually exclusive with `tls`) |
+| `tls` | HAProxy (HTTPS mode) | TLS termination (mutually exclusive with `loadbalancer`) |
 | `monitoring` | Prometheus + Grafana | Metrics and visualization |
+
+**⚠️ Important**: Use EITHER `loadbalancer` OR `tls`, never both together!
 
 **Profile combinations:**
 ```bash
-# Minimal
+# Minimal (no load balancer)
 docker-compose --profile basic up -d
 
-# Standard
+# Standard HTTP
 docker-compose --profile basic --profile loadbalancer up -d
 
-# Full stack with HTTPS
+# HTTPS with TLS
+docker-compose --profile basic --profile tls up -d
+
+# HTTP with monitoring
+docker-compose --profile basic --profile loadbalancer --profile monitoring up -d
+
+# HTTPS with monitoring
 docker-compose --profile basic --profile tls --profile monitoring up -d
 ```
 
@@ -152,17 +160,23 @@ This generates:
 
 ### Step 3: Start the Cluster
 
+**Choose ONE load balancer mode (HTTP or HTTPS):**
+
 ```bash
-# HTTP load balancer (development)
+# Option A: HTTP load balancer (development)
 docker-compose --profile basic --profile loadbalancer up -d
 
-# HTTPS load balancer (production) - requires certs
-./generate-certs.sh  # Self-signed for development
+# Option B: HTTPS load balancer (production) - requires certs
+./generate-certs.sh  # Generate self-signed cert first
 docker-compose --profile basic --profile tls up -d
 
-# With monitoring
+# With monitoring (add to either option)
 docker-compose --profile basic --profile loadbalancer --profile monitoring up -d
+# OR
+docker-compose --profile basic --profile tls --profile monitoring up -d
 ```
+
+**⚠️ Don't use both `--profile loadbalancer` and `--profile tls` together!**
 
 Wait ~30 seconds for initialization.
 
