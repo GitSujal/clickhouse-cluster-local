@@ -1,5 +1,7 @@
 # ClickHouse Cluster (2 Shards × 2 Replicas)
 
+[![CI](https://github.com/YOUR_USERNAME/try_clickhouse/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/try_clickhouse/actions/workflows/ci.yml)
+
 Production-ready ClickHouse cluster with load balancing, replication, and monitoring.
 
 **Architecture:** 4 ClickHouse nodes, 3 ClickHouse Keeper nodes, HAProxy load balancer, Prometheus + Grafana monitoring.

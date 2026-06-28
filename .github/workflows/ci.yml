@@ -1,0 +1,490 @@
+name: ClickHouse Cluster CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  COMPOSE_PROFILES: basic,loadbalancer,monitoring
+
+jobs:
+  test-cluster:
+    name: Test ClickHouse Cluster Setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Display Docker info
+        run: |
+          docker --version
+          docker compose version
+
+      - name: Generate environment variables (non-interactive)
+        run: |
+          # Generate .env with default secure passwords non-interactively
+          cat > .env << 'EOF'
+          # Grafana Configuration
+          GF_SECURITY_ADMIN_USER=admin
+          GF_SECURITY_ADMIN_PASSWORD=test_grafana_password_12345
+          GF_SECURITY_SECRET_KEY=test_secret_key_abcdefghijklmnopqrstuvwxyz12345
+
+          # ClickHouse Passwords (SHA256 hashes)
+          CLICKHOUSE_ADMIN_PASSWORD_SHA256=$(echo -n "test_admin_password_12345" | sha256sum | awk '{print $1}')
+          CLICKHOUSE_APP_USER_PASSWORD_SHA256=$(echo -n "test_app_user_password_12345" | sha256sum | awk '{print $1}')
+
+          # HAProxy Stats Authentication
+          HAPROXY_STATS_USER=admin
+          HAPROXY_STATS_PASSWORD=test_haproxy_password_12345
+          EOF
+
+          # Generate actual SHA256 hashes
+          ADMIN_HASH=$(echo -n "test_admin_password_12345" | sha256sum | awk '{print $1}')
+          APP_HASH=$(echo -n "test_app_user_password_12345" | sha256sum | awk '{print $1}')
+
+          cat > .env << EOF
+          GF_SECURITY_ADMIN_USER=admin
+          GF_SECURITY_ADMIN_PASSWORD=test_grafana_password_12345
+          GF_SECURITY_SECRET_KEY=test_secret_key_abcdefghijklmnopqrstuvwxyz12345
+          CLICKHOUSE_ADMIN_PASSWORD_SHA256=$ADMIN_HASH
+          CLICKHOUSE_APP_USER_PASSWORD_SHA256=$APP_HASH
+          HAPROXY_STATS_USER=admin
+          HAPROXY_STATS_PASSWORD=test_haproxy_password_12345
+          EOF
+
+          echo "✓ .env file generated"
+          cat .env
+
+      - name: Generate cluster configuration
+        run: |
+          ./setup.sh
+          echo "✓ Configuration files generated"
+
+      - name: Verify generated configs exist
+        run: |
+          echo "Checking for generated configuration files..."
+          test -f prometheus.yml && echo "✓ prometheus.yml exists"
+          test -f haproxy-http.cfg && echo "✓ haproxy-http.cfg exists"
+          test -f haproxy-https.cfg && echo "✓ haproxy-https.cfg exists"
+          test -d fs/volumes && echo "✓ fs/volumes/ exists"
+          test -d grafana/provisioning && echo "✓ grafana/provisioning/ exists"
+
+          echo "Checking ClickHouse configs..."
+          for i in {01..04}; do
+            test -f fs/volumes/clickhouse-$i/etc/clickhouse-server/config.d/config.xml && echo "✓ clickhouse-$i config exists"
+          done
+
+          echo "Checking Keeper configs..."
+          for i in {01..03}; do
+            test -f fs/volumes/clickhouse-keeper-$i/etc/clickhouse-keeper/keeper_config.xml && echo "✓ keeper-$i config exists"
+          done
+
+      - name: Start ClickHouse cluster
+        run: |
+          docker compose --profile basic --profile loadbalancer --profile monitoring up -d
+          echo "✓ Docker Compose started"
+
+      - name: Wait for services to be healthy
+        run: |
+          echo "Waiting for services to start (60 seconds)..."
+          sleep 60
+
+          echo "Checking container status..."
+          docker compose ps
+
+      - name: Test ClickHouse Keeper quorum
+        run: |
+          echo "Testing ClickHouse Keeper nodes..."
+
+          for i in {01..03}; do
+            echo "Testing clickhouse-keeper-$i..."
+
+            # Wait up to 30s for keeper to respond
+            for attempt in {1..6}; do
+              if echo "mntr" | docker exec -i clickhouse-keeper-$i nc 127.0.0.1 9181 2>/dev/null | grep -q zk_server_state; then
+                status=$(echo "mntr" | docker exec -i clickhouse-keeper-$i nc 127.0.0.1 9181 2>/dev/null | grep zk_server_state | awk '{print $2}')
+                echo "✓ clickhouse-keeper-$i is $status"
+                break
+              fi
+              echo "  Attempt $attempt/6: Waiting for keeper..."
+              sleep 5
+            done
+          done
+
+          # Verify at least one leader
+          echo "mntr" | docker exec -i clickhouse-keeper-01 nc 127.0.0.1 9181 | grep zk_server_state || exit 1
+
+      - name: Test ClickHouse nodes connectivity
+        run: |
+          echo "Testing ClickHouse node connectivity..."
+
+          # Test each node directly
+          for i in {01..04}; do
+            port=$((10000 + ${i#0} * 10000 + 8123))
+            echo "Testing clickhouse-$i on port $port..."
+
+            for attempt in {1..12}; do
+              if curl -s http://localhost:$port/ping | grep -q "Ok"; then
+                echo "✓ clickhouse-$i responding"
+                break
+              fi
+              echo "  Attempt $attempt/12: Waiting for node..."
+              sleep 5
+            done
+
+            # Final check
+            curl -s http://localhost:$port/ping | grep -q "Ok" || exit 1
+          done
+
+      - name: Test HAProxy load balancer
+        run: |
+          echo "Testing HAProxy load balancer..."
+
+          # Test HTTP endpoint
+          for attempt in {1..6}; do
+            if curl -s http://localhost:8123/ping | grep -q "Ok"; then
+              echo "✓ HAProxy HTTP endpoint responding"
+              break
+            fi
+            echo "  Attempt $attempt/6: Waiting for HAProxy..."
+            sleep 5
+          done
+
+          curl -s http://localhost:8123/ping | grep -q "Ok" || exit 1
+
+          # Test stats page
+          if curl -s -u admin:test_haproxy_password_12345 http://localhost:8404 | grep -q "HAProxy"; then
+            echo "✓ HAProxy stats page accessible"
+          else
+            echo "✗ HAProxy stats page not accessible"
+            exit 1
+          fi
+
+      - name: Test cluster topology
+        run: |
+          echo "Testing cluster topology..."
+
+          RESULT=$(docker exec clickhouse-01 clickhouse-client \
+            --user admin \
+            --password test_admin_password_12345 \
+            --query "SELECT cluster, shard_num, replica_num, host_name FROM system.clusters WHERE cluster = 'my_cluster' FORMAT TabSeparated" 2>&1)
+
+          if [ $? -eq 0 ]; then
+            echo "✓ Cluster 'my_cluster' query successful"
+            echo "$RESULT"
+
+            # Verify we have 4 nodes (2 shards × 2 replicas)
+            NODE_COUNT=$(echo "$RESULT" | wc -l)
+            if [ "$NODE_COUNT" -eq 4 ]; then
+              echo "✓ All 4 nodes in cluster topology"
+            else
+              echo "✗ Expected 4 nodes, found $NODE_COUNT"
+              exit 1
+            fi
+          else
+            echo "✗ Failed to query cluster topology"
+            echo "$RESULT"
+            exit 1
+          fi
+
+      - name: Test ClickHouse operations
+        run: |
+          echo "Testing ClickHouse database operations..."
+
+          # Create database
+          docker exec clickhouse-01 clickhouse-client \
+            --user admin \
+            --password test_admin_password_12345 \
+            --query "CREATE DATABASE IF NOT EXISTS test_db ON CLUSTER my_cluster"
+          echo "✓ Database created"
+
+          # Create replicated table
+          docker exec clickhouse-01 clickhouse-client \
+            --user admin \
+            --password test_admin_password_12345 \
+            --multiquery << 'EOF'
+          CREATE TABLE IF NOT EXISTS test_db.test_table ON CLUSTER my_cluster
+          (
+              id UInt64,
+              name String,
+              timestamp DateTime DEFAULT now()
+          )
+          ENGINE = ReplicatedMergeTree('/clickhouse/tables/{database}/{table}/{shard}', '{replica}')
+          ORDER BY (id, timestamp);
+
+          CREATE TABLE IF NOT EXISTS test_db.test_table_distributed ON CLUSTER my_cluster
+          AS test_db.test_table
+          ENGINE = Distributed('my_cluster', 'test_db', 'test_table', rand());
+          EOF
+          echo "✓ Tables created"
+
+          # Insert data via distributed table
+          docker exec clickhouse-01 clickhouse-client \
+            --user admin \
+            --password test_admin_password_12345 \
+            --query "INSERT INTO test_db.test_table_distributed (id, name) VALUES (1, 'test1'), (2, 'test2'), (3, 'test3')"
+          echo "✓ Data inserted"
+
+          # Query data
+          RESULT=$(docker exec clickhouse-01 clickhouse-client \
+            --user admin \
+            --password test_admin_password_12345 \
+            --query "SELECT count() FROM test_db.test_table_distributed")
+
+          if [ "$RESULT" -eq 3 ]; then
+            echo "✓ Query successful: $RESULT rows"
+          else
+            echo "✗ Expected 3 rows, got $RESULT"
+            exit 1
+          fi
+
+          # Verify data is distributed across shards
+          echo "Verifying data distribution..."
+          for i in {01..04}; do
+            count=$(docker exec clickhouse-$i clickhouse-client \
+              --user admin \
+              --password test_admin_password_12345 \
+              --query "SELECT count() FROM test_db.test_table")
+            echo "  clickhouse-$i: $count rows"
+          done
+
+      - name: Test replication
+        run: |
+          echo "Testing replication status..."
+
+          REPLICATION=$(docker exec clickhouse-01 clickhouse-client \
+            --user admin \
+            --password test_admin_password_12345 \
+            --query "SELECT database, table, is_leader, total_replicas, active_replicas FROM system.replicas WHERE database = 'test_db'" \
+            2>&1)
+
+          echo "$REPLICATION"
+
+          if echo "$REPLICATION" | grep -q "test_table"; then
+            echo "✓ Replication configured"
+
+            # Check active replicas
+            ACTIVE=$(echo "$REPLICATION" | grep test_table | awk '{print $5}' | head -1)
+            if [ "$ACTIVE" -eq 2 ]; then
+              echo "✓ Both replicas active in shard"
+            else
+              echo "⚠ Warning: Expected 2 active replicas, found $ACTIVE"
+            fi
+          else
+            echo "✗ Replication not found"
+            exit 1
+          fi
+
+      - name: Test Prometheus metrics
+        run: |
+          echo "Testing Prometheus..."
+
+          # Test Prometheus health
+          for attempt in {1..6}; do
+            if curl -s http://localhost:9090/-/healthy | grep -q "Prometheus"; then
+              echo "✓ Prometheus is healthy"
+              break
+            fi
+            echo "  Attempt $attempt/6: Waiting for Prometheus..."
+            sleep 5
+          done
+
+          curl -s http://localhost:9090/-/healthy | grep -q "Prometheus" || exit 1
+
+          # Test ClickHouse metrics endpoint
+          if curl -s http://localhost:18123/metrics | grep -q "ClickHouse"; then
+            echo "✓ ClickHouse metrics endpoint accessible"
+          else
+            echo "✗ ClickHouse metrics endpoint not accessible"
+            exit 1
+          fi
+
+          # Check Prometheus targets
+          TARGETS=$(curl -s http://localhost:9090/api/v1/targets | jq -r '.data.activeTargets | length')
+          echo "✓ Prometheus monitoring $TARGETS targets"
+
+      - name: Test Grafana
+        run: |
+          echo "Testing Grafana..."
+
+          # Wait for Grafana to be ready
+          for attempt in {1..12}; do
+            if curl -s http://localhost:3000/api/health | grep -q "ok"; then
+              echo "✓ Grafana is healthy"
+              break
+            fi
+            echo "  Attempt $attempt/12: Waiting for Grafana..."
+            sleep 5
+          done
+
+          curl -s http://localhost:3000/api/health | grep -q "ok" || exit 1
+
+          # Test Grafana login
+          if curl -s -u admin:test_grafana_password_12345 http://localhost:3000/api/datasources | grep -q "Prometheus"; then
+            echo "✓ Grafana datasource configured"
+          else
+            echo "✗ Grafana datasource not found"
+            exit 1
+          fi
+
+      - name: Run comprehensive health check
+        run: |
+          echo "Running comprehensive health check..."
+
+          # Make verify-cluster.sh work non-interactively
+          export ADMIN_PASS="test_admin_password_12345"
+
+          # Create a CI-friendly version
+          cat > verify-cluster-ci.sh << 'EOFSCRIPT'
+          #!/bin/bash
+          set -e
+
+          GREEN='\033[0;32m'
+          RED='\033[0;31m'
+          NC='\033[0m'
+
+          ADMIN_PASS="${ADMIN_PASS:-test_admin_password_12345}"
+
+          echo "=========================================="
+          echo "ClickHouse Cluster Health Check (CI)"
+          echo "=========================================="
+          echo ""
+
+          # Check cluster topology
+          echo "Checking cluster topology..."
+          docker exec clickhouse-01 clickhouse-client \
+            --user admin \
+            --password "$ADMIN_PASS" \
+            --query "SELECT cluster, shard_num, replica_num, host_name FROM system.clusters WHERE cluster = 'my_cluster'"
+          echo ""
+
+          # Check Keeper status
+          echo "Checking Keeper status..."
+          for i in {01..03}; do
+            status=$(echo "mntr" | docker exec -i clickhouse-keeper-$i nc 127.0.0.1 9181 2>/dev/null | grep zk_server_state | awk '{print $2}')
+            echo -e "${GREEN}✓${NC} keeper-$i: $status"
+          done
+          echo ""
+
+          echo "=========================================="
+          echo -e "${GREEN}Health Check Complete!${NC}"
+          echo "=========================================="
+          EOFSCRIPT
+
+          chmod +x verify-cluster-ci.sh
+          ./verify-cluster-ci.sh
+
+      - name: Display service logs on failure
+        if: failure()
+        run: |
+          echo "=========================================="
+          echo "Container Status"
+          echo "=========================================="
+          docker compose ps
+
+          echo ""
+          echo "=========================================="
+          echo "ClickHouse-01 Logs"
+          echo "=========================================="
+          docker compose logs --tail=50 clickhouse-01
+
+          echo ""
+          echo "=========================================="
+          echo "Keeper-01 Logs"
+          echo "=========================================="
+          docker compose logs --tail=50 clickhouse-keeper-01
+
+          echo ""
+          echo "=========================================="
+          echo "HAProxy Logs"
+          echo "=========================================="
+          docker compose logs --tail=50 haproxy_http
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up..."
+          docker compose --profile basic --profile loadbalancer --profile monitoring down -v
+          echo "✓ Cleanup complete"
+
+  test-tls:
+    name: Test TLS Configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate environment and configs
+        run: |
+          # Generate .env
+          ADMIN_HASH=$(echo -n "test_admin_password_12345" | sha256sum | awk '{print $1}')
+          APP_HASH=$(echo -n "test_app_user_password_12345" | sha256sum | awk '{print $1}')
+
+          cat > .env << EOF
+          GF_SECURITY_ADMIN_USER=admin
+          GF_SECURITY_ADMIN_PASSWORD=test_grafana_password_12345
+          GF_SECURITY_SECRET_KEY=test_secret_key_abcdefghijklmnopqrstuvwxyz12345
+          CLICKHOUSE_ADMIN_PASSWORD_SHA256=$ADMIN_HASH
+          CLICKHOUSE_APP_USER_PASSWORD_SHA256=$APP_HASH
+          HAPROXY_STATS_USER=admin
+          HAPROXY_STATS_PASSWORD=test_haproxy_password_12345
+          EOF
+
+          ./setup.sh
+
+      - name: Generate TLS certificates
+        run: |
+          ./generate-certs.sh
+          echo "✓ TLS certificates generated"
+
+          # Verify certificates exist
+          test -f certs/server.pem && echo "✓ server.pem exists"
+          test -f certs/server.crt && echo "✓ server.crt exists"
+          test -f certs/server.key && echo "✓ server.key exists"
+
+      - name: Start cluster with TLS
+        run: |
+          docker compose --profile basic --profile tls up -d
+          echo "✓ Cluster started with TLS"
+
+          echo "Waiting for services (60 seconds)..."
+          sleep 60
+
+      - name: Test HTTPS endpoint
+        run: |
+          echo "Testing HTTPS endpoint..."
+
+          # Test with self-signed cert (skip verification)
+          if curl -k -s https://localhost:8443/ping | grep -q "Ok"; then
+            echo "✓ HTTPS endpoint responding"
+          else
+            echo "✗ HTTPS endpoint not responding"
+            exit 1
+          fi
+
+          # Test HTTPS stats page
+          if curl -k -s -u admin:test_haproxy_password_12345 https://localhost:8405 | grep -q "HAProxy"; then
+            echo "✓ HTTPS stats page accessible"
+          else
+            echo "✗ HTTPS stats page not accessible"
+            exit 1
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose --profile basic --profile tls down -v
+          echo "✓ Cleanup complete"

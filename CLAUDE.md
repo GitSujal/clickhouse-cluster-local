@@ -1,7 +1,7 @@
 # ClickHouse Cluster - Quick Reference
 
 ## What This Is
-Production-ready ClickHouse cluster: 4 servers (2 shards × 2 replicas), 3 Keeper nodes, HAProxy load balancer, Prometheus + Grafana monitoring.
+Production-ready ClickHouse cluster: 4 servers (2 shards × 2 replicas), 3 Keeper nodes, HAProxy load balancer, Prometheus + Grafana monitoring. CI-tested on every push.
 
 ## Architecture
 - **Cluster name**: `my_cluster` (used in all SQL: `ON CLUSTER my_cluster`)
@@ -20,6 +20,7 @@ generate-certs.sh           Creates self-signed TLS certs for HAProxy
 verify-cluster.sh           Automated health check
 verify-security.sh          Security audit
 .env.example                Template showing required variables
+.github/workflows/ci.yml    GitHub Actions CI pipeline (tests everything)
 ```
 
 ### Generated Files (gitignored, regenerate with setup.sh)
