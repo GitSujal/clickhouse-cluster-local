@@ -25,7 +25,6 @@ services:
     container_name: clickhouse-loadbalancer
     hostname: haproxy
     profiles:
-      - all
       - tls  # Only starts with --profile tls
     volumes:
       - ${PWD}/haproxy-https.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
