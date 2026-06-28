@@ -2,10 +2,11 @@ services:
   # HAProxy Load Balancer (HTTP mode) - Use --profile loadbalancer
   haproxy_http:
     image: haproxy:latest
-    container_name: clickhouse-loadbalancer
+    container_name: clickhouse-loadbalancer-http
     hostname: haproxy
     profiles:
       - loadbalancer  # Only starts with --profile loadbalancer
+      - all
     volumes:
       - ${PWD}/haproxy-http.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
       - ${PWD}/certs:/usr/local/etc/haproxy/certs:ro
@@ -22,7 +23,7 @@ services:
   # HAProxy Load Balancer (HTTPS mode) - Use --profile tls
   haproxy_https:
     image: haproxy:latest
-    container_name: clickhouse-loadbalancer
+    container_name: clickhouse-loadbalancer-https
     hostname: haproxy
     profiles:
       - tls  # Only starts with --profile tls
