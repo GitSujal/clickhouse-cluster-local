@@ -127,8 +127,9 @@ jobs:
           echo "Testing ClickHouse node connectivity..."
 
           # Test each node directly
+          # Ports: 18123, 28123, 38123, 48123
           for i in {01..04}; do
-            port=$((10000 + ${i#0} * 10000 + 8123))
+            port=$((${i#0} * 10000 + 8123))
             echo "Testing clickhouse-$i on port $port..."
 
             for attempt in {1..12}; do
