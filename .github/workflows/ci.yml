@@ -227,6 +227,19 @@ jobs:
           EOF
           echo "✓ Tables created"
 
+          # Wait for distributed DDL to complete on all nodes
+          echo "Waiting for DDL to propagate..."
+          sleep 5
+
+          # Verify tables exist on all nodes
+          for i in {01..04}; do
+            docker exec clickhouse-$i clickhouse-client \
+              --user admin \
+              --password test_admin_password_12345 \
+              --query "EXISTS test_db.test_table_distributed" || exit 1
+          done
+          echo "✓ Tables verified on all nodes"
+
           # Insert data via distributed table
           docker exec clickhouse-01 clickhouse-client \
             --user admin \
