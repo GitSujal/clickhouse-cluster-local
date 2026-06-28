@@ -302,7 +302,7 @@ jobs:
           curl -s http://localhost:9090/-/healthy | grep -q "Prometheus" || exit 1
 
           # Test ClickHouse metrics endpoint
-          if curl -s http://localhost:18123/metrics | grep -q "ClickHouse"; then
+          if curl -s http://localhost:19363/metrics | grep -q "ClickHouse"; then
             echo "✓ ClickHouse metrics endpoint accessible"
           else
             echo "✗ ClickHouse metrics endpoint not accessible"
